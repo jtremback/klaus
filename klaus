@@ -142,6 +142,7 @@ cmd_run() {
     local tty_flag="-it"
     [ ! -t 0 ] && tty_flag="-i"
 
+    [ -t 0 ] && clear
     docker run $tty_flag --rm \
         -v "$(pwd)":"$(pwd)" \
         -w "$(pwd)" \
