@@ -7,7 +7,12 @@ Klaus runs Claude Code inside a container with `--dangerously-skip-permissions`,
 ## Install
 
 ```bash
-# From a local clone
+curl -fsSL https://github.com/jtremback/klaus/releases/latest/download/install.sh | bash
+```
+
+Or from a local clone:
+
+```bash
 git clone https://github.com/jtremback/klaus.git
 cd klaus
 ./install.sh
