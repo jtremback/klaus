@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+KLAUS_VERSION="0.1.0"
+KLAUS_REPO="jtremback/klaus"
+KLAUS_BASE_IMAGE="klaus-base:latest"
+KLAUS_ROOT="${KLAUS_ROOT:-$HOME/.klaus}"
+KLAUS_CLAUDE_HOME="$KLAUS_ROOT/claude"
+KLAUS_DIR="$KLAUS_ROOT/install"
+KLAUS_IMAGE=""
+
+# --- helpers ---
+
+# Print error and exit.
+die() { echo "klaus: $*" >&2; exit 1; }
+
+# Hash the Klausfile to use as a Docker image tag. One cached image per
+# unique Klausfile, so switching between projects is instant.
+klausfile_hash() {
+    if [ -f "Klausfile" ]; then
+        shasum -a 256 Klausfile | cut -c1-12
+    else
+        echo "none"
+    fi
+}
+
+# Find Anthropic credentials. Checks env vars first, then macOS Keychain,
+# then Linux credentials file. Sets AUTH_ENV_FLAGS and AUTH_VOLUME_FLAGS
+# arrays that get passed to docker run.
+resolve_auth() {
+    AUTH_ENV_FLAGS=()
+    AUTH_VOLUME_FLAGS=()
+
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        AUTH_ENV_FLAGS=(-e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+        return
+    fi
+    if [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+        AUTH_ENV_FLAGS=(-e "ANTHROPIC_AUTH_TOKEN=$ANTHROPIC_AUTH_TOKEN")
+        return
+    fi
+
+    # macOS Keychain
+    if command -v security &>/dev/null; then
+        local key
+        key="$(security find-generic-password -s "Claude Code" -w 2>/dev/null || true)"
+        if [ -n "$key" ]; then
+            if [[ "$key" == sk-ant-* ]]; then
+                AUTH_ENV_FLAGS=(-e "ANTHROPIC_API_KEY=$key")
+            else
+                AUTH_ENV_FLAGS=(-e "ANTHROPIC_AUTH_TOKEN=$key")
+            fi
+            return
+        fi
+    fi
+
+    # Linux/Windows credentials file
+    local creds="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
+    if [ -f "$creds" ]; then
+        AUTH_VOLUME_FLAGS=(-v "$creds:/home/klaus/.claude/.credentials.json:ro")
+        return
+    fi
+
+    die "No credentials found. Set ANTHROPIC_API_KEY or run 'claude login' on the host first."
+}
+
+# Build the base Docker image if it doesn't exist yet.
+ensure_base_image() {
+    if ! docker image inspect "$KLAUS_BASE_IMAGE" &>/dev/null; then
+        echo "klaus: building base image (first run)..."
+        docker build -t "$KLAUS_BASE_IMAGE" \
+            --build-arg USER_UID="$(id -u)" \
+            "$KLAUS_DIR"
+    fi
+}
+
+# Set KLAUS_IMAGE to the right Docker image. If no Klausfile, uses the base
+# image. If a Klausfile exists, builds a derived image from it (Dockerfile
+# fragment prepended with FROM and USER root).
+resolve_image() {
+    local hash
+    hash="$(klausfile_hash)"
+
+    if [ "$hash" = "none" ]; then
+        KLAUS_IMAGE="$KLAUS_BASE_IMAGE"
+        return
+    fi
+
+    KLAUS_IMAGE="klaus-project:$hash"
+    if docker image inspect "$KLAUS_IMAGE" &>/dev/null; then
+        return
+    fi
+
+    echo "klaus: building project image from Klausfile..."
+    local tmpfile
+    tmpfile="$(mktemp)"
+    { echo "FROM $KLAUS_BASE_IMAGE"; cat Klausfile; } > "$tmpfile"
+    docker build -t "$KLAUS_IMAGE" -f "$tmpfile" "$KLAUS_DIR"
+    rm -f "$tmpfile"
+}
+
+# One-time first-run gate. Seeds ~/.klaus/claude/ from ~/.claude/ if it
+# doesn't exist yet.
+ensure_claude_home() {
+    if [ ! -d "$KLAUS_CLAUDE_HOME" ]; then
+        seed_from_host
+    fi
+}
+
+# Copy ~/.claude/ and ~/.claude.json into the sandbox, and install the
+# Klaus instructions as a rules file so Claude sees them every session.
+seed_from_host() {
+    echo "klaus: seeding from ~/.claude..."
+    mkdir -p "$KLAUS_CLAUDE_HOME"
+
+    if [ -d "$HOME/.claude" ]; then
+        rsync -a "$HOME/.claude/" "$KLAUS_CLAUDE_HOME/"
+    fi
+
+    if [ -f "$HOME/.claude.json" ]; then
+        cp "$HOME/.claude.json" "$KLAUS_ROOT/.claude.json"
+    fi
+
+    mkdir -p "$KLAUS_CLAUDE_HOME/rules"
+    if [ -f "$KLAUS_DIR/KLAUS.md" ]; then
+        cp "$KLAUS_DIR/KLAUS.md" "$KLAUS_CLAUDE_HOME/rules/klaus.md"
+    fi
+
+    echo "klaus: seeded."
+}
+
+# --- commands ---
+
+# Main command. Ensures image, config, and auth are ready, then runs
+# docker with the project dir mounted at its real host path.
+cmd_run() {
+    ensure_base_image
+    resolve_image
+    ensure_claude_home
+    resolve_auth
+
+    local tty_flag="-it"
+    [ ! -t 0 ] && tty_flag="-i"
+
+    docker run $tty_flag --rm \
+        -v "$(pwd)":"$(pwd)" \
+        -w "$(pwd)" \
+        -v "$KLAUS_CLAUDE_HOME":/home/klaus/.claude \
+        -v "$KLAUS_ROOT/.claude.json":/home/klaus/.claude.json \
+        ${AUTH_ENV_FLAGS[@]+"${AUTH_ENV_FLAGS[@]}"} \
+        ${AUTH_VOLUME_FLAGS[@]+"${AUTH_VOLUME_FLAGS[@]}"} \
+        -e TERM="${TERM:-xterm-256color}" \
+        -e DISABLE_AUTOUPDATER=1 \
+        -e DISABLE_TELEMETRY=1 \
+        "$KLAUS_IMAGE" \
+        "$@"
+}
+
+# Force-rebuild the base image (and project image if Klausfile exists).
+cmd_build() {
+    echo "klaus: building base image..."
+    docker build -t "$KLAUS_BASE_IMAGE" \
+        --build-arg USER_UID="$(id -u)" \
+        "$KLAUS_DIR"
+
+    if [ -f "Klausfile" ]; then
+        echo "klaus: building project image from Klausfile..."
+        local hash tmpfile
+        hash="$(klausfile_hash)"
+        tmpfile="$(mktemp)"
+        { echo "FROM $KLAUS_BASE_IMAGE"; cat Klausfile; } > "$tmpfile"
+        docker build -t "klaus-project:$hash" -f "$tmpfile" "$KLAUS_DIR"
+        rm -f "$tmpfile"
+    fi
+
+    echo "klaus: done."
+}
+
+# Manually re-copy settings from host ~/.claude/ into the sandbox.
+cmd_seed() {
+    seed_from_host
+}
+
+# Print version.
+cmd_version() {
+    echo "klaus $KLAUS_VERSION"
+}
+
+# Re-download and install the latest release.
+cmd_update() {
+    echo "klaus: updating..."
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "$tmpdir"' RETURN
+
+    local url="https://github.com/$KLAUS_REPO/releases/latest/download/install.sh"
+    curl -fsSL "$url" -o "$tmpdir/install.sh" \
+        || die "Failed to download installer from $url"
+    bash "$tmpdir/install.sh"
+}
+
+# Remove symlinks, ~/.klaus/, and Docker images.
+cmd_uninstall() {
+    echo "klaus: uninstalling..."
+    for link in /usr/local/bin/klaus "$HOME/.local/bin/klaus"; do
+        if [ -L "$link" ]; then
+            echo "  removing $link"
+            rm -f "$link" 2>/dev/null || sudo rm -f "$link"
+        fi
+    done
+    if [ -d "$KLAUS_ROOT" ]; then
+        echo "  removing $KLAUS_ROOT"
+        rm -rf "$KLAUS_ROOT"
+    fi
+    docker rmi -f "$KLAUS_BASE_IMAGE" 2>/dev/null || true
+    docker images --format '{{.Repository}}:{{.Tag}}' | grep '^klaus-project:' | xargs -r docker rmi -f 2>/dev/null || true
+    echo "klaus: uninstalled."
+}
+
+cmd_help() {
+    cat <<'EOF'
+klaus — sandboxed Claude Code
+
+Usage:
+    klaus                     Interactive Claude session in current directory
+    klaus -p "prompt"         One-shot prompt
+    klaus --print "prompt"    Print mode (no file edits)
+    klaus build               Rebuild the Docker image(s)
+    klaus seed                Re-copy settings from ~/.claude
+    klaus update              Update klaus to the latest release
+    klaus uninstall           Remove klaus completely
+    klaus version             Print version
+    klaus help                This message
+
+Klausfile:
+    Drop a file called "Klausfile" in your project root to pre-install
+    tools into the container image. It uses Dockerfile syntax — each line
+    is a Dockerfile instruction (RUN, ENV, etc.). Example:
+
+        RUN sudo apt-get update && sudo apt-get install -y postgresql-client
+        RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        ENV PATH="/home/klaus/.cargo/bin:${PATH}"
+        RUN pip3 install --break-system-packages numpy pandas
+
+    Commands run as the klaus user (which has passwordless sudo), so
+    use sudo for system-level installs — same as in a live session.
+    The image is cached per Klausfile hash — it only rebuilds when
+    the file changes. If a tool is missing mid-session, Claude can
+    install it with sudo and update the Klausfile for next time.
+
+Authentication (checked in order):
+    1. ANTHROPIC_API_KEY env var
+    2. ANTHROPIC_AUTH_TOKEN env var
+    3. macOS Keychain ("Claude Code" entry)
+    4. ~/.claude/.credentials.json (Linux/Windows)
+
+Environment:
+    KLAUS_ROOT                 Override ~/.klaus as the root directory.
+
+Files:
+    ~/.klaus/install/          Tool files (Dockerfile, scripts)
+    ~/.klaus/claude/           Sandboxed Claude config (isolated from ~/.claude)
+    ~/.klaus/.claude.json      Sandboxed Claude app state
+
+The current directory is mounted read-write into the container.
+Claude runs with --dangerously-skip-permissions inside the sandbox.
+EOF
+}
+
+# --- main ---
+
+case "${1:-}" in
+    build)      cmd_build ;;
+    seed)       cmd_seed ;;
+    update)     cmd_update ;;
+    uninstall)  cmd_uninstall ;;
+    version|--version|-v)  cmd_version ;;
+    help|--help|-h)  cmd_help ;;
+    *)          cmd_run "$@" ;;
+esac
