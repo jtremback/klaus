@@ -20,7 +20,9 @@ WORKDIR /home/klaus
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/home/klaus/.local/bin:${PATH}"
 
-RUN git config --global user.email "klaus@sandbox" \
+RUN mkdir -p ~/.ssh \
+    && ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null \
+    && git config --global user.email "klaus@sandbox" \
     && git config --global user.name "Klaus Sandbox"
 
 ENTRYPOINT ["claude", "--dangerously-skip-permissions"]
