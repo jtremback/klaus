@@ -150,6 +150,7 @@ cmd_run() {
         ${AUTH_ENV_FLAGS[@]+"${AUTH_ENV_FLAGS[@]}"} \
         ${AUTH_VOLUME_FLAGS[@]+"${AUTH_VOLUME_FLAGS[@]}"} \
         -e TERM="${TERM:-xterm-256color}" \
+        -e COLORTERM="${COLORTERM:-truecolor}" \
         -e DISABLE_AUTOUPDATER=1 \
         -e DISABLE_TELEMETRY=1 \
         "$KLAUS_IMAGE" \
