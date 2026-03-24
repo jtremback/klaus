@@ -177,7 +177,19 @@ cmd_build() {
 }
 
 # Manually re-copy settings from host ~/.claude/ into the sandbox.
+# Warns if the sandbox already exists since this overwrites everything.
 cmd_seed() {
+    if [ -d "$KLAUS_CLAUDE_HOME" ]; then
+        echo "klaus: WARNING — this will overwrite everything in ~/.klaus/claude/"
+        echo "  with a fresh copy from ~/.claude/. Any settings, memory, or"
+        echo "  conversation history from previous Klaus sessions will be lost."
+        printf "  Continue? [y/N] "
+        read -r reply
+        if [[ ! "$reply" =~ ^[Yy]$ ]]; then
+            echo "klaus: cancelled."
+            return
+        fi
+    fi
     seed_from_host
 }
 
@@ -226,7 +238,7 @@ Usage:
     klaus -p "prompt"         One-shot prompt
     klaus --print "prompt"    Print mode (no file edits)
     klaus build               Rebuild the Docker image(s)
-    klaus seed                Re-copy settings from ~/.claude
+    klaus seed                Overwrite sandbox config with a fresh copy from ~/.claude
     klaus update              Update klaus to the latest release
     klaus uninstall           Remove klaus completely
     klaus version             Print version

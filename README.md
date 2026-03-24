@@ -55,7 +55,7 @@ Klaus finds your Anthropic credentials automatically:
 
 ```bash
 klaus build       # rebuild the Docker image
-klaus seed        # re-copy settings from ~/.claude
+klaus seed        # overwrite sandbox config with fresh copy from ~/.claude
 klaus update      # update to the latest release
 klaus version     # print version
 klaus uninstall   # remove everything
@@ -74,7 +74,9 @@ On first run, Klaus seeds the sandbox from your existing Claude Code setup so yo
 - `~/.claude.json` is copied to `~/.klaus/.claude.json` — your app state (skips onboarding, preserves preferences)
 - Your project's `CLAUDE.md` and `.claude/` settings come in through the mounted project directory as usual
 
-After seeding, the sandbox is fully independent. Changes Claude makes to settings or memory inside Klaus stay in `~/.klaus/` and don't affect your host `~/.claude/`. Run `klaus seed` any time to refresh the sandbox from your host settings.
+After seeding, the sandbox is fully independent. Changes Claude makes to settings or memory inside Klaus stay in `~/.klaus/` and don't affect your host `~/.claude/`.
+
+`klaus seed` is a one-way overwrite — it replaces everything in `~/.klaus/claude/` with a fresh copy from `~/.claude/`. Any settings, memory, or conversation history from previous Klaus sessions will be lost. It will ask for confirmation if the sandbox already exists.
 
 ### File layout
 
