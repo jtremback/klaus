@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KLAUS_VERSION="0.1.0"
+KLAUS_VERSION="0.1.1"
 KLAUS_REPO="jtremback/klaus"
 KLAUS_BASE_IMAGE="klaus-base:latest"
 KLAUS_ROOT="${KLAUS_ROOT:-$HOME/.klaus}"
