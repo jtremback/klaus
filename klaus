@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KLAUS_VERSION="0.1.1"
+KLAUS_VERSION="0.2.0"
 KLAUS_REPO="jtremback/klaus"
 KLAUS_BASE_IMAGE="klaus-base:latest"
 KLAUS_ROOT="${KLAUS_ROOT:-$HOME/.klaus}"
@@ -23,6 +23,7 @@ klausfile_hash() {
         echo "none"
     fi
 }
+
 
 # Find Anthropic credentials. Checks env vars first, then macOS Keychain,
 # then Linux credentials file. Sets AUTH_ENV_FLAGS and AUTH_VOLUME_FLAGS
@@ -75,8 +76,7 @@ ensure_base_image() {
 }
 
 # Set KLAUS_IMAGE to the right Docker image. If no Klausfile, uses the base
-# image. If a Klausfile exists, builds a derived image from it (Dockerfile
-# fragment prepended with FROM and USER root).
+# image. If a Klausfile exists, builds a derived image from it.
 resolve_image() {
     local hash
     hash="$(klausfile_hash)"
@@ -95,8 +95,13 @@ resolve_image() {
     local tmpfile
     tmpfile="$(mktemp)"
     { echo "FROM $KLAUS_BASE_IMAGE"; cat Klausfile; } > "$tmpfile"
-    docker build -t "$KLAUS_IMAGE" -f "$tmpfile" "$KLAUS_DIR"
-    rm -f "$tmpfile"
+    if docker build -t "$KLAUS_IMAGE" -f "$tmpfile" "$KLAUS_DIR"; then
+        rm -f "$tmpfile"
+    else
+        rm -f "$tmpfile"
+        echo "klaus: Klausfile build failed, falling back to base image."
+        KLAUS_IMAGE="$KLAUS_BASE_IMAGE"
+    fi
 }
 
 # One-time first-run gate. Seeds ~/.klaus/claude/ from ~/.claude/ if it
@@ -148,6 +153,7 @@ cmd_run() {
         -w "$(pwd)" \
         -v "$KLAUS_CLAUDE_HOME":/home/klaus/.claude \
         -v "$KLAUS_ROOT/.claude.json":/home/klaus/.claude.json \
+        --add-host=host.docker.internal:host-gateway \
         ${AUTH_ENV_FLAGS[@]+"${AUTH_ENV_FLAGS[@]}"} \
         ${AUTH_VOLUME_FLAGS[@]+"${AUTH_VOLUME_FLAGS[@]}"} \
         -e TERM="${TERM:-xterm-256color}" \
@@ -200,17 +206,27 @@ cmd_version() {
     echo "klaus $KLAUS_VERSION"
 }
 
-# Re-download and install the latest release.
+# Pull latest changes and rebuild.
 cmd_update() {
     echo "klaus: updating..."
-    local tmpdir
-    tmpdir="$(mktemp -d)"
-    trap 'rm -rf "$tmpdir"' RETURN
+    if [ -d "$KLAUS_DIR/.git" ]; then
+        git -C "$KLAUS_DIR" pull --ff-only || die "Failed to pull updates"
+    else
+        die "$KLAUS_DIR is not a git repo. Reinstall with: curl -fsSL https://github.com/$KLAUS_REPO/releases/latest/download/install.sh | bash"
+    fi
 
-    local url="https://github.com/$KLAUS_REPO/releases/latest/download/install.sh"
-    curl -fsSL "$url" -o "$tmpdir/install.sh" \
-        || die "Failed to download installer from $url"
-    bash "$tmpdir/install.sh"
+    # Update rules file
+    if [ -d "$KLAUS_CLAUDE_HOME/rules" ]; then
+        cp "$KLAUS_DIR/KLAUS.md" "$KLAUS_CLAUDE_HOME/rules/klaus.md"
+    fi
+
+    # Rebuild base image
+    echo "klaus: rebuilding image..."
+    docker build -t "$KLAUS_BASE_IMAGE" \
+        --build-arg USER_UID="$(id -u)" \
+        "$KLAUS_DIR"
+
+    echo "klaus: updated to $(grep '^KLAUS_VERSION=' "$KLAUS_DIR/klaus" | cut -d'"' -f2)"
 }
 
 # Remove symlinks, ~/.klaus/, and Docker images.
@@ -248,8 +264,7 @@ Usage:
 
 Klausfile:
     Drop a file called "Klausfile" in your project root to pre-install
-    tools into the container image. It uses Dockerfile syntax — each line
-    is a Dockerfile instruction (RUN, ENV, etc.). Example:
+    tools into the container image. It uses Dockerfile syntax:
 
         RUN sudo apt-get update && sudo apt-get install -y postgresql-client
         RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
