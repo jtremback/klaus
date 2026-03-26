@@ -20,10 +20,12 @@ WORKDIR /home/klaus
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/home/klaus/.local/bin:${PATH}"
 
+ARG GIT_USER_NAME="Klaus Sandbox"
+ARG GIT_USER_EMAIL="klaus@sandbox"
 RUN mkdir -p ~/.ssh \
     && ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null \
-    && git config --global user.email "klaus@sandbox" \
-    && git config --global user.name "Klaus Sandbox" \
+    && git config --global user.email "$GIT_USER_EMAIL" \
+    && git config --global user.name "$GIT_USER_NAME" \
     && git config --global --add url."https://github.com/".insteadOf "git@github.com:" \
     && git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
 

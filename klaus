@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KLAUS_VERSION="0.2.0"
+KLAUS_VERSION="0.2.1"
 KLAUS_REPO="jtremback/klaus"
 KLAUS_BASE_IMAGE="klaus-base:latest"
 KLAUS_ROOT="${KLAUS_ROOT:-$HOME/.klaus}"
@@ -71,6 +71,8 @@ ensure_base_image() {
         echo "klaus: building base image (first run)..."
         docker build -t "$KLAUS_BASE_IMAGE" \
             --build-arg USER_UID="$(id -u)" \
+            --build-arg GIT_USER_NAME="$(git config --global user.name 2>/dev/null || echo 'Klaus Sandbox')" \
+            --build-arg GIT_USER_EMAIL="$(git config --global user.email 2>/dev/null || echo 'klaus@sandbox')" \
             "$KLAUS_DIR"
     fi
 }

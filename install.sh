@@ -82,6 +82,8 @@ fi
 echo "klaus: building Docker image..."
 docker build -t klaus-base:latest \
     --build-arg USER_UID="$(id -u)" \
+    --build-arg GIT_USER_NAME="$(git config --global user.name 2>/dev/null || echo 'Klaus Sandbox')" \
+    --build-arg GIT_USER_EMAIL="$(git config --global user.email 2>/dev/null || echo 'klaus@sandbox')" \
     "$KLAUS_INSTALL_DIR"
 
 echo ""
